@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.casterly.trident-mint</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/casterly/Documents/Dev/trident/mint/mint.py</string>
+    <string>--daemon</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>/Users/casterly/.claude/state/trident-mint.err.log</string>
+  <key>StandardOutPath</key><string>/Users/casterly/.claude/state/trident-mint.out.log</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>Nice</key><integer>10</integer>
+</dict>
+</plist>
