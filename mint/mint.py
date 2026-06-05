@@ -223,10 +223,26 @@ def reconcile_counters():
 
 # ------------------------------------------------------------------ canary
 
+_canary_cache = {"ok": True, "checked": 0}
+
+
 def canary_lite(tele):
-    """Wave-1 contract check: statusline schema still yields five_hour.used_percentage.
-    Full canary (§3.9, hook fixtures + AgentInput enum) lands in Wave 4."""
+    """Telemetry contract: statusline schema still yields five_hour.used_percentage."""
     return bool(tele.get("contract_ok"))
+
+
+def canary_full():
+    """Full §3.9 contract check (canary.py) — at startup, then every ~25min per
+    process (canary.py itself re-runs only on CC version change)."""
+    if _now() - _canary_cache["checked"] < 1500:
+        return _canary_cache["ok"]
+    try:
+        import canary
+        ok, _ = canary.run()
+    except Exception:
+        ok = True  # canary itself failing must not degrade the wallet (fail open)
+    _canary_cache.update(ok=ok, checked=_now())
+    return ok
 
 
 # -------------------------------------------------------------------- tick
@@ -251,7 +267,7 @@ def tick():
     default = formulas.derived_block(lever["global"], h_raw, active)
     per_pin = {sid: formulas.derived_block(v, h_raw, active) for sid, v in pins.items()}
 
-    contract_ok = canary_lite(tele)
+    contract_ok = canary_lite(tele) and canary_full()
     default["posture"] = render_posture(default, tele, lever_out, False)
     for sid, blk in per_pin.items():
         blk["posture"] = render_posture(blk, tele, lever_out, True)

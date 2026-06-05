@@ -48,9 +48,25 @@ case "${1:-status}" in
     esac
     ;;
   canary)
-    # Wave-1 lite: telemetry schema + wallet freshness. Full §3.9 canary lands Wave 4.
+    python3 -c "
+import sys, os
+sys.path.insert(0, os.path.join('$(dirname "$MINT")'))
+import canary
+ok, failures = canary.run(force=True)
+print('canary: OK — contract intact' if ok else f'canary: DEGRADED — {failures}')"
     python3 "$MINT" --tick >/dev/null
-    jq -r 'if .contract_ok then "canary: OK (statusline telemetry contract intact)" else "canary: DEGRADED — contract_ok=false" end' "$WALLET"
+    ;;
+  proxy)
+    case "${2:-}" in
+      off) touch "$STATE/trident-proxy-off"
+           launchctl unload ~/Library/LaunchAgents/com.casterly.trident-proxy.plist 2>/dev/null
+           echo "proxy OFF — headless spawns go direct (env-stamp health-gate sees the flag instantly)";;
+      on)  rm -f "$STATE/trident-proxy-off"
+           launchctl load ~/Library/LaunchAgents/com.casterly.trident-proxy.plist 2>/dev/null
+           echo "proxy ON — env-stamp re-attaches once 127.0.0.1:8742 answers";;
+      *)   if nc -z 127.0.0.1 8742 2>/dev/null; then echo "proxy: LIVE on 127.0.0.1:8742"; else echo "proxy: down"; fi
+           [ -f "$STATE/trident-proxy-off" ] && echo "off-flag set";;
+    esac
     ;;
   tick)
     python3 "$MINT" --tick
