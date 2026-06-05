@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime state (machine-local, never committed)
+*.log
+*.lock
+wallet.json
+*-counters.json
+*-canary.json
+trident-inject-cap-*
+
+# OS
+.DS_Store
