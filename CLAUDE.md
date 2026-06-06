@@ -11,6 +11,7 @@ Read `ARCHITECTURE.md` before touching anything — it encodes the verified-mech
 ## Invariants
 - Lever resolution: `L_eff = pin if pinned else global` — pins are explicit per-terminal bypasses (human-set ONLY, never scripted); global governs all unpinned/new terminals. MINT owns resolution; consumers never re-derive. Theater guard: 📌 pin visibility everywhere + `theater_warning` + dead-pin reaping.
 - L=100 = true free lane (zero lever damping). L=0 = minimum viable shape, never a halt.
+- **Posture is ROUTING guidance, never a work-stop.** GREEN/AMBER/🔴RED change the *shape* (model tier, fan-out width, inline-vs-spawn), never *whether the task gets done*. RED ≠ stop — it means "keep working, cheapest sufficient shape." The emitted RED tag in `mint/mint.py:render_posture` and `~/.claude/scripts/budget-posture.sh` MUST carry this clarifier; never reword it back into something that reads as "halt / don't do it."
 - Mechanical: spawn model tier, injection bytes, compact threshold, ROI admission. Advisory: width, thinking, voters (floor 1). Never claim advisory things are mechanical.
 - Output filter never strips tracebacks/test output/diffs. Injection never drops the active-handoff chunk.
 - Hooks must be sub-ms reads of wallet.json — all computation lives in the MINT daemon.

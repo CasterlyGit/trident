@@ -195,7 +195,8 @@ def render_posture(block, tele, lever, pinned_here):
                f"gate big fan-outs. W≤{block['fanout_max']}, V≥{block['verify_min']}, "
                f"tier≤{block['tier_ceiling_spawn']}.")
     else:
-        tag = ("🔴 RED — conserve: inline-first, no speculative work, finish compactly, "
+        tag = ("🔴 RED — conserve (ROUTING guidance, NOT a stop: keep working, just cheapest "
+               "sufficient shape): inline-first, no speculative work, finish compactly, "
                f"confirm before ANY workflow. W≤{block['fanout_max']}, V≥{block['verify_min']}, "
                f"tier≤{block['tier_ceiling_spawn']}.")
     active = tele["active_sessions"]
