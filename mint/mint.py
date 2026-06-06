@@ -26,6 +26,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import formulas
+import pace
 
 STATE = os.environ.get("TRIDENT_STATE_DIR") or os.path.expanduser("~/.claude/state")
 WALLET = os.path.join(STATE, "wallet.json")
@@ -64,10 +65,19 @@ def _atomic_write(path, obj):
 
 # ---------------------------------------------------------------- telemetry
 
+def _mtime(path):
+    """getmtime that survives the file vanishing mid-tick (session-end reap race) —
+    one missing rate-limits file must never fail the whole tick."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
 def _session_files():
     return sorted(
         glob.glob(os.path.join(STATE, "rate-limits-*.json")),
-        key=lambda p: os.path.getmtime(p),
+        key=_mtime,
         reverse=True,
     )
 
@@ -77,7 +87,7 @@ def _reap_stale_files(files):
     now = _now()
     keep = []
     for i, f in enumerate(files):
-        if now - os.path.getmtime(f) > DEAD_PIN_S or i >= RL_CAP:
+        if now - _mtime(f) > DEAD_PIN_S or i >= RL_CAP:
             try:
                 os.remove(f)
             except OSError:
@@ -92,14 +102,14 @@ def read_telemetry():
     monotonic-guarded truth; newest per-session file is the fallback."""
     files = _reap_stale_files(_session_files())
     now = _now()
-    active = sum(1 for f in files if now - os.path.getmtime(f) <= ACTIVE_WINDOW_S) or 1
+    active = sum(1 for f in files if now - _mtime(f) <= ACTIVE_WINDOW_S) or 1
 
     src, src_mtime = None, 0
     shared = os.path.join(STATE, "rate-limits.json")
     for cand in [shared] + files[:1]:
         d = _read_json(cand)
         if d and d.get("rate_limits", {}).get("five_hour", {}).get("used_percentage") is not None:
-            mt = os.path.getmtime(cand)
+            mt = _mtime(cand)
             if mt > src_mtime:
                 src, src_mtime = d, mt
 
@@ -153,10 +163,10 @@ def live_pins(pins):
     out, active_pinned = {}, 0
     for sid, val in pins.items():
         f = os.path.join(STATE, f"rate-limits-{sid}.json")
-        if not os.path.exists(f) or now - os.path.getmtime(f) > DEAD_PIN_S:
+        if not os.path.exists(f) or now - _mtime(f) > DEAD_PIN_S:
             continue  # dead pin — reaped from view
         out[sid] = val
-        if now - os.path.getmtime(f) <= ACTIVE_WINDOW_S:
+        if now - _mtime(f) <= ACTIVE_WINDOW_S:
             active_pinned += 1
     return out, active_pinned
 
@@ -293,6 +303,14 @@ def tick():
         "headless": {"model": headless_model,
                      "envelope": default["envelope"].replace("[TRIDENT ", "[TRIDENT TC2 ")},
     }
+    # Pace valve (sequential-burn governor): fail OPEN — any error → no pace block
+    # → pace-valve.sh no-ops. Never let pacing break pricing.
+    try:
+        pb = pace.pace_block(_now())
+        if pb is not None:
+            wallet["pace"] = pb
+    except Exception:
+        pass
     _atomic_write(WALLET, wallet)
     reconcile_counters()
     return wallet
