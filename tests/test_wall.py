@@ -149,6 +149,15 @@ class TestWallCheck(WallBase):
         m = self.manifest()
         self.assertEqual([s["sid"] for s in m["sessions"]], [SID_A])
 
+    def test_exclude_cwd_root_keepalive(self):
+        # keepalive runs claude at cwd "/" — must never be walled/respawned
+        self.write_wallet(left_pct=1.0, resets_at=int(time.time()) + 90)
+        self.write_session(SID_A, self.proj_a)
+        self.write_session(SID_B, "/")
+        self.run_check()
+        m = self.manifest()
+        self.assertEqual([s["sid"] for s in m["sessions"]], [SID_A])
+
     def test_exclude_list(self):
         self.write_wallet(left_pct=1.0, resets_at=int(time.time()) + 90)
         self.write_session(SID_A, self.proj_a)

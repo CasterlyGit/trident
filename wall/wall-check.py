@@ -37,6 +37,10 @@ GEN_HANDOFF = os.path.expanduser("~/.claude/scripts/generate-handoff.py")
 THRESHOLD_PCT = float(os.environ.get("WALL_THRESHOLD_PCT", "2.0"))
 SESSION_WINDOW_S = int(os.environ.get("WALL_SESSION_WINDOW_S", "1800"))
 WALLET_STALE_S = 120
+# cwd-based exclusion (colon-separated). Default "/" skips the tty-keepalive
+# session durably — its sid changes on every respawn, so the sid-prefix file
+# alone would go stale; nothing else runs claude at /.
+EXCLUDE_CWDS = set(filter(None, os.environ.get("WALL_EXCLUDE_CWDS", "/").split(":")))
 
 
 def _now():
@@ -172,6 +176,8 @@ def main():
         hf_id = f"shed-ho-{sid[:8]}"
         transcript = _transcript_for(sid)
         cwd = _cwd_from_transcript(transcript) if transcript else os.path.expanduser("~")
+        if cwd in EXCLUDE_CWDS:
+            continue
         handoff = _refresh_handoff(transcript, sid, hf_id)
         sessions.append({"sid": sid, "hf_id": hf_id, "cwd": cwd,
                          "handoff": handoff, "transcript": transcript,
