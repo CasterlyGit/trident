@@ -47,12 +47,14 @@ def check_statusline_schema():
 
 
 def check_agent_model_enum():
-    """AgentInput.model still a writable enum carrying sonnet|opus|haiku."""
+    """AgentInput.model still a writable enum carrying sonnet|opus|haiku|fable
+    (fable verified in sdk-tools.d.ts 2026-06-10; the wallet may bake a fable
+    ceiling, so its removal IS contract drift)."""
     try:
         src = open(SDK_TOOLS).read()
         i = src.index("interface AgentInput")
         chunk = src[i:i + 3000]
-        return all(f'"{t}"' in chunk for t in ("sonnet", "opus", "haiku"))
+        return all(f'"{t}"' in chunk for t in ("sonnet", "opus", "haiku", "fable"))
     except Exception:
         return None  # indeterminate (file moved) — warn, don't degrade
 

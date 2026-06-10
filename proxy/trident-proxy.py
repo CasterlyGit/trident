@@ -33,10 +33,11 @@ LEDGER = os.path.join(STATE, "proxy-ledger.jsonl")
 OFF_FLAG = os.path.join(STATE, "trident-proxy-off")
 UPSTREAM = "api.anthropic.com"
 PORT = 8742
-TIER_RANK = {"haiku": 0, "sonnet": 1, "opus": 2}
+TIER_RANK = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3}
 TIER_MODEL = {"haiku": "claude-haiku-4-5-20251001",
               "sonnet": "claude-sonnet-4-6",
-              "opus": "claude-opus-4-8"}
+              "opus": "claude-opus-4-8",
+              "fable": "claude-fable-5"}
 
 
 def model_tier(model_id):
