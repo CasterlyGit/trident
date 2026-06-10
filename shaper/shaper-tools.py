@@ -30,7 +30,7 @@ STATE = os.environ.get("TRIDENT_STATE_DIR") or os.path.expanduser("~/.claude/sta
 WALLET = os.path.join(STATE, "wallet.json")
 COUNTERS = os.path.join(STATE, "trident-counters.json")
 LOCK = os.path.join(STATE, "trident-counters.lock")
-TIER_RANK = {"haiku": 0, "sonnet": 1, "opus": 2}
+TIER_RANK = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3}
 SPECULATIVE_RE = re.compile(r"\bspeculative|just in case|in parallel speculat", re.I)
 
 

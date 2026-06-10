@@ -26,11 +26,14 @@ class TestFormulas(unittest.TestCase):
         self.assertAlmostEqual(formulas.M(50), 0.354, places=3)
 
     def test_tier_table_calibration(self):
-        # ARCHITECTURE lever table: L=100→opus, L=63→sonnet, L=30→sonnet, L=0→haiku (H full)
-        for L, want in [(100, "opus"), (63, "sonnet"), (30, "sonnet"), (0, "haiku")]:
+        # ARCHITECTURE lever table: L=100+H≥90→fable, L=63→sonnet, L=30→sonnet, L=0→haiku (H full)
+        for L, want in [(100, "fable"), (63, "sonnet"), (30, "sonnet"), (0, "haiku")]:
             b = formulas.derived_block(L, 100, 1)
             self.assertEqual(b["tier_ceiling_spawn"], want, f"L={L}")
+        # fable band is narrow: free lane but headroom dampened (2 windows) → opus
+        self.assertEqual(formulas.derived_block(100, 100, 2)["tier_ceiling_spawn"], "opus")
         # depth cascade
+        self.assertEqual(formulas.tier_child("fable"), "opus")
         self.assertEqual(formulas.tier_child("opus"), "sonnet")
         self.assertEqual(formulas.tier_child("sonnet"), "haiku")
         self.assertEqual(formulas.tier_child("haiku"), "haiku")

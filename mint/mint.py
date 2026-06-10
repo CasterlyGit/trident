@@ -33,6 +33,8 @@ WALLET = os.path.join(STATE, "wallet.json")
 COUNTERS = os.path.join(STATE, "trident-counters.json")
 THROTTLE = os.path.join(STATE, "burn-throttle.json")
 PAUSED = os.path.join(STATE, "trident-paused")
+HISTORY = os.path.join(STATE, "trident-history.jsonl")
+POLICY = os.path.join(STATE, "trident-policy.json")
 RL_CAP = 50
 TICK_S = 30
 ACTIVE_WINDOW_S = 120
@@ -132,6 +134,84 @@ def read_telemetry():
     }
 
 
+# --------------------------------------------------- history + forecast + brain
+
+def append_history(tele, block):
+    """One compact line per tick → the brain's (and forecast's) trajectory data.
+    Ring-bounded: >200KB → keep the newest 1000 lines. Fail open."""
+    fh = tele.get("five_hour") or {}
+    if fh.get("left_pct") is None:
+        return
+    try:
+        rec = {"ts": _now(), "l5": fh["left_pct"],
+               "l7": (tele.get("seven_day") or {}).get("left_pct"),
+               "act": tele["active_sessions"], "L": block["L_eff"],
+               "tier": block["tier_ceiling_spawn"], "W": block["fanout_max"]}
+        with open(HISTORY, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        if os.path.getsize(HISTORY) > 200_000:
+            with open(HISTORY) as f:
+                tail = f.readlines()[-1000:]
+            _atomic_write_text(HISTORY, "".join(tail))
+    except Exception:
+        pass
+
+
+def _atomic_write_text(path, text):
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def read_forecast(tele):
+    """Deterministic wall ETA from the history ring (last 45min). Fail open → None."""
+    fh = tele.get("five_hour") or {}
+    if fh.get("left_pct") is None:
+        return None
+    try:
+        cutoff = _now() - 2700
+        points = []
+        with open(HISTORY) as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("ts", 0) >= cutoff:
+                    points.append((r["ts"], r.get("l5")))
+        secs = max(0, fh.get("resets_at", 0) - _now())
+        return formulas.burn_forecast(points, fh["left_pct"], secs)
+    except Exception:
+        return None
+
+
+def read_policy():
+    """Validated, unexpired brain policy or None. Every failure mode → None (fail open)."""
+    doc = _read_json(POLICY)
+    if not doc:
+        return None, None
+    clamped = formulas.validate_policy(doc, _now())
+    if not clamped:
+        return None, None
+    meta = {"policy_active": True,
+            "expires_at": doc.get("expires_at"),
+            "fired_at": doc.get("generated_at"),
+            "rationale": str(doc.get("rationale", ""))[:280]}
+    return clamped, meta
+
+
+def spawn_brain(wallet):
+    """Let the brain decide whether to fire (detached). Never blocks the tick."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "..", "brain"))
+        import brain
+        brain.maybe_spawn(wallet)
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------------- lever
 
 def read_lever():
@@ -178,7 +258,7 @@ def _fmt_reset(secs):
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
-def render_posture(block, tele, lever, pinned_here):
+def render_posture(block, tele, lever, pinned_here, forecast=None):
     """One-line GREEN/AMBER/RED routing posture — same contract as budget-posture.sh."""
     fh = tele.get("five_hour") or {}
     left = fh.get("left_pct")
@@ -195,7 +275,8 @@ def render_posture(block, tele, lever, pinned_here):
                f"gate big fan-outs. W≤{block['fanout_max']}, V≥{block['verify_min']}, "
                f"tier≤{block['tier_ceiling_spawn']}.")
     else:
-        tag = ("🔴 RED — conserve: inline-first, no speculative work, finish compactly, "
+        tag = ("🔴 RED — conserve (ROUTING guidance, NOT a stop: keep working, just cheapest "
+               "sufficient shape): inline-first, no speculative work, finish compactly, "
                f"confirm before ANY workflow. W≤{block['fanout_max']}, V≥{block['verify_min']}, "
                f"tier≤{block['tier_ceiling_spawn']}.")
     active = tele["active_sessions"]
@@ -207,7 +288,12 @@ def render_posture(block, tele, lever, pinned_here):
     stale = ""
     if tele.get("stale_s") is not None and tele["stale_s"] > ACTIVE_WINDOW_S:
         stale = f" · ⚠ telemetry {tele['stale_s']}s stale (advisory-only)"
-    lines = [f"5h: {left:.0f}% left · resets {_fmt_reset(secs)}{conc}{lev}{theater}{stale} · {tag}",
+    fc = ""
+    if forecast and forecast.get("eta_exhaust_min") and forecast["eta_exhaust_min"] < 480:
+        wall = " (before reset!)" if forecast.get("wall_before_reset") else ""
+        fc = f" · 🔮 wall in ~{_fmt_reset(forecast['eta_exhaust_min'] * 60)} at current burn{wall}"
+    brain_note = " · 🧠 brain policy live" if block.get("brain") else ""
+    lines = [f"5h: {left:.0f}% left · resets {_fmt_reset(secs)}{conc}{lev}{theater}{stale}{fc}{brain_note} · {tag}",
              block["envelope"]]
     return lines
 
@@ -257,7 +343,9 @@ def canary_full():
 
 # -------------------------------------------------------------------- tick
 
-def tick():
+def tick(brain_ok=False):
+    """brain_ok: only the --daemon loop may let the brain spawn — never --tick,
+    never ingest, never tests (a temp-state tick must not fire a real model call)."""
     if os.path.exists(PAUSED):
         return None  # paused: wallet goes stale, consumers visibly degrade — fail open
     tele = read_telemetry()
@@ -277,15 +365,20 @@ def tick():
     default = formulas.derived_block(lever["global"], h_raw, active)
     per_pin = {sid: formulas.derived_block(v, h_raw, active) for sid, v in pins.items()}
 
+    # Brain overlay: default block ONLY — pins are explicit human bypass valves,
+    # no machine policy may re-route them. Invalid/expired/missing policy → no-op.
+    policy, brain_meta = read_policy()
+    if policy:
+        default = formulas.apply_policy(default, policy)
+
+    forecast = read_forecast(tele)
     contract_ok = canary_lite(tele) and canary_full()
-    default["posture"] = render_posture(default, tele, lever_out, False)
+    default["posture"] = render_posture(default, tele, lever_out, False, forecast)
     for sid, blk in per_pin.items():
-        blk["posture"] = render_posture(blk, tele, lever_out, True)
+        blk["posture"] = render_posture(blk, tele, lever_out, True, forecast)
 
     # Headless (TC2) runs at L_eff=global, depth 0 → spawn ceiling governs its model.
-    headless_model = {"haiku": "claude-haiku-4-5-20251001",
-                      "sonnet": "claude-sonnet-4-6",
-                      "opus": "claude-opus-4-8"}[default["tier_ceiling_spawn"]]
+    headless_model = formulas.TIER_MODEL_IDS[default["tier_ceiling_spawn"]]
 
     wallet = {
         "schema_version": SCHEMA_VERSION,
@@ -302,7 +395,10 @@ def tick():
         "derived": {"default": default, "per_pin": per_pin},
         "headless": {"model": headless_model,
                      "envelope": default["envelope"].replace("[TRIDENT ", "[TRIDENT TC2 ")},
+        "brain": brain_meta or {"policy_active": False},
     }
+    if forecast:
+        wallet["forecast"] = forecast
     # Pace valve (sequential-burn governor): fail OPEN — any error → no pace block
     # → pace-valve.sh no-ops. Never let pacing break pricing.
     try:
@@ -313,6 +409,9 @@ def tick():
         pass
     _atomic_write(WALLET, wallet)
     reconcile_counters()
+    append_history(tele, default)
+    if brain_ok and os.environ.get("TRIDENT_BRAIN_DISARM") != "1":
+        spawn_brain(wallet)
     return wallet
 
 
@@ -393,7 +492,7 @@ def main():
     elif "--daemon" in args:
         while True:
             try:
-                tick()
+                tick(brain_ok=True)
             except Exception as e:  # fail open, visibly: stderr → launchd log
                 print(f"mint tick failed: {e}", file=sys.stderr)
             time.sleep(TICK_S)
