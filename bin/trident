@@ -6,7 +6,8 @@ set -euo pipefail
 
 STATE="${TRIDENT_STATE_DIR:-$HOME/.claude/state}"
 WALLET="$STATE/wallet.json"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# readlink -f: survive invocation via PATH symlink (~/.local/bin/trident)
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 MINT="$ROOT/mint/mint.py"
 BRAIN="$ROOT/brain/brain.py"
 
