@@ -1,9 +1,10 @@
 <h1 align="center">🔱 trident</h1>
 
 <p align="center">
-  <b>A token-burn governor for AI coding agents.</b><br>
+  <b>A self-tuning token-burn governor for AI coding agents.</b><br>
   Every AI request — terminal, IDE, headless <code>claude -p</code>, subagents, raw SDK —
-  routed through three god-routers that price it, shape it, and settle it.
+  routed through three god-routers that price it, shape it, and settle it,<br>
+  re-fitted up to twice per budget window by a Fable-class policy brain.
 </p>
 
 <p align="center">
@@ -13,9 +14,10 @@
 </p>
 
 <p align="center">
-  <img alt="status" src="https://img.shields.io/badge/status-all%204%20waves%20live-00e5ff">
-  <img alt="tests" src="https://img.shields.io/badge/tests-34%2F34%20green-22c55e">
+  <img alt="status" src="https://img.shields.io/badge/status-4%20waves%20%2B%20brain%20live-00e5ff">
+  <img alt="tests" src="https://img.shields.io/badge/tests-80%2F80%20green-22c55e">
   <img alt="surfaces" src="https://img.shields.io/badge/governs-6%20surfaces-7c3aed">
+  <img alt="brain" src="https://img.shields.io/badge/brain-%E2%89%A42%20fires%2F5h%20window-f472b6">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-555">
 </p>
 
@@ -30,6 +32,9 @@ minutes. **trident** sits underneath every surface that can spend, and makes the
 
 ```
                 ┌──────────────────────────────────────────────┐
+ burn digest ─▶ │  BRAIN    re-fits it  → clamped policy overlay│  claude-fable-5 · ≤2 fires / 5h window
+ (slow loop)    └──────────────────────────────────────────────┘
+                ┌──────────────────────────────────────────────┐
  telemetry ───▶ │  MINT     prices it   → atomic wallet.json    │  the single source of truth
  (every 30s)    └──────────────────────────────────────────────┘
                 ┌──────────────────────────────────────────────┐
@@ -40,7 +45,23 @@ minutes. **trident** sits underneath every surface that can spend, and makes the
                 └──────────────────────────────────────────────┘
 ```
 
-The three prongs are why it's called trident.
+The three prongs are why it's called trident. The brain is not a fourth prong — it's the
+hand that periodically re-grips the other three.
+
+## The brain (new)
+
+The fast path is 100% mechanical — sub-ms hook reads of pre-baked curves. The **brain**
+sits above it: at most twice per 5-hour window it reads a compact burn digest (telemetry
+history ring, in-flight counters, a deterministic wall-ETA forecast) and asks
+`claude-fable-5` for a routing policy — *"burn is 30pp/h with 4 idle windows: narrow the
+fan-out, bias one tier up, compact earlier."* The policy is **clamped in code**
+(tier ±1, bounded multipliers), expires on its own, applies only to the un-pinned default
+lane, and can never touch verification floors. Every fire lands in an audit log with its
+rationale and cost; `no_change` verdicts *delete* the overlay. Missing, expired, or
+malformed policy → pure mechanical curves. Kill switch: `trident brain off`.
+
+Deterministic forecasting rides along free: MINT fits the burn slope every tick and the
+posture line warns `🔮 wall in ~2h10m at current burn` — before the wall, not after.
 
 ## The bright line
 

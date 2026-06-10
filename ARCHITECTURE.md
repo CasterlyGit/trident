@@ -18,7 +18,7 @@ Claude Code binary**, plus the best graft from every loser.
 
 | Mechanism | Status | Evidence |
 |---|---|---|
-| PreToolUse rewrite of `AgentInput.model` via `updatedInput` | ✅ MECHANICAL | `updatedInput` ×219 in binary; `model` is a writable enum (`sonnet\|opus\|haiku`) |
+| PreToolUse rewrite of `AgentInput.model` via `updatedInput` | ✅ MECHANICAL | `updatedInput` ×219 in binary; `model` is a writable enum (`sonnet\|opus\|haiku\|fable` — fable verified in sdk-tools.d.ts 2026-06-10) |
 | PreToolUse DENY of any tool call (incl. Agent/Workflow) | ✅ MECHANICAL | `permissionDecision` ×32 |
 | Fan-out width cap via tool input | ❌ NO FIELD | AgentInput has no concurrency/max_turns field — width is **advisory + counted** |
 | Thinking-budget injection into a spawn | ❌ NO FIELD | API-level setting, no hook can touch it — **advisory only** |
@@ -151,6 +151,36 @@ whole system smarter — the advisory gap closes over time because LEDGER rememb
   thresholds fire earlier as M falls (the only honest lever on the ungovernable 98%-sequential main loop:
   end heavy sessions earlier, restart clean), display verbosity, learning-run admission.
 
+### The BRAIN (slow loop above the segments — added 2026-06-10)
+
+The fast path stays 100% mechanical. The brain (`brain/brain.py`, claude-fable-5) is a
+*policy re-fitter* sitting above it:
+
+- **Cadence:** ≤2 fires per 5h window, spawned detached from MINT `--daemon` ticks only
+  (never `--tick`/ingest/tests). Triggers: no live policy + 45min cooldown, or a
+  posture-band flip + 20min cooldown. Never below 8% left (don't burn the dregs deciding
+  how to save the dregs). Kill switch: `~/.claude/state/trident-brain-off`.
+- **Input:** a compact burn digest — wallet, lever, 45min of the `trident-history.jsonl`
+  ring (one line per tick, 200KB cap), counters, pace, the deterministic forecast.
+- **Output:** strict-JSON knobs → `trident-policy.json`, expiring (≤2h, never past reset).
+  MINT folds it into the **default block only — pins are human bypass valves, no machine
+  policy may re-route them.** Envelope gains `🧠` while a policy is live.
+- **Rails are code, not prompt:** `formulas.validate_policy` is the single gate —
+  tier_bias ±1, width 0.5–1.5×, think 0.5–1.5×, inject 0.6–1.25× (floor 800), compact
+  0.75–1.25×, spec on/off. `verify_min`/`roi_min`/L/H are not overlay-addressable at
+  all. Garbage/expired/missing policy → pure mechanical curves (fail open, like
+  everything else).
+- **Explainability:** every fire appends digest summary, raw + clamped policy, rationale,
+  cost and duration to `trident-brain-audit.jsonl` (`trident brain audit`). An explicit
+  `no_change` verdict *deletes* any live overlay — the brain can hand control back.
+- **Forecast (deterministic, model-free):** MINT fits burn slope over the history ring
+  each tick → `wallet.forecast {burn_pph, eta_exhaust_min, wall_before_reset}`; posture
+  shows `🔮 wall in ~2h10m at current burn` when the wall lands inside 8h. The brain
+  consumes it; the WALL stays the hard backstop.
+- **Why Fable in the loop is not ironic:** ~1 call per 2.5h amortized against every
+  routing decision in the window; the call itself runs with `ANTHROPIC_BASE_URL`
+  stripped so trident's own proxy ceiling can't rewrite its model out from under it.
+
 ---
 
 ## Lever semantics v2 (continuous, 0–100)
@@ -159,7 +189,7 @@ whole system smarter — the advisory gap closes over time because LEDGER rememb
 
 | Dimension | Formula | L=100 | L=63 | L=30 | L=0 | Enforcement |
 |---|---|---|---|---|---|---|
-| Spawn model ceiling | tier curve on `M·H` + depth cascade | Opus | Sonnet (Opus if score>0.95) | Sonnet rare, Haiku default | Haiku | **MECHANICAL** (PreToolUse rewrite + proxy) |
+| Spawn model ceiling | tier curve on `M·H` + depth cascade | Fable (H_eff≥90) else Opus | Sonnet (Opus if score>0.95) | Sonnet rare, Haiku default | Haiku | **MECHANICAL** (PreToolUse rewrite + proxy) |
 | Fan-out width | `W = max(1, floor(12·M·(H/100)^1.2))` | 12 | 5 | 1–2 | 1 | counted (flock) + advisory + Workflow-DENY |
 | Thinking budget | `T = 32k·M·(H/100)²` (quadratic — first luxury shed) | 32k | ~8k | ~1k | 0 | **ADVISORY** (envelope) — no API hook exists |
 | Context injection | `I = floor(4000·M^0.6)` (concave — context degrades slowly) | 4000 | 3000 | 1900 | handoff-only | **MECHANICAL** (shaper-prompt emits the bytes) |
