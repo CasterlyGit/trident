@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # trident CLI — status | posture | counters | pause [on|off] | canary | tick
+#               brain [status|fire|force|on|off|audit] | policy [show|clear] | forecast
 # Thin reads of wallet.json; all math lives in the MINT daemon.
 set -euo pipefail
 
 STATE="${TRIDENT_STATE_DIR:-$HOME/.claude/state}"
 WALLET="$STATE/wallet.json"
-MINT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/mint/mint.py"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MINT="$ROOT/mint/mint.py"
+BRAIN="$ROOT/brain/brain.py"
 
 age() {
   [ -f "$WALLET" ] || { echo "-"; return; }
@@ -71,7 +74,28 @@ print('canary: OK — contract intact' if ok else f'canary: DEGRADED — {failur
   tick)
     python3 "$MINT" --tick
     ;;
+  brain)
+    case "${2:-status}" in
+      status) python3 "$BRAIN" --status;;
+      fire)   python3 "$BRAIN" --fire;;
+      force)  python3 "$BRAIN" --force;;
+      off)    touch "$STATE/trident-brain-off"; echo "brain OFF — mechanical curves only (existing policy still honored until expiry; 'trident policy clear' to drop it)";;
+      on)     rm -f "$STATE/trident-brain-off"; echo "brain ON — next eligible tick may fire";;
+      audit)  tail -n "${3:-5}" "$STATE/trident-brain-audit.jsonl" 2>/dev/null | jq . || echo "no audit yet";;
+      *)      echo "usage: trident brain [status|fire|force|on|off|audit [n]]"; exit 2;;
+    esac
+    ;;
+  policy)
+    case "${2:-show}" in
+      show)  jq . "$STATE/trident-policy.json" 2>/dev/null || echo "no live policy (mechanical curves)";;
+      clear) rm -f "$STATE/trident-policy.json"; python3 "$MINT" --tick >/dev/null; echo "policy cleared — wallet re-baked mechanical";;
+      *)     echo "usage: trident policy [show|clear]"; exit 2;;
+    esac
+    ;;
+  forecast)
+    jq '.forecast // "no forecast (need ≥10min of history ring)"' "$WALLET" 2>/dev/null
+    ;;
   *)
-    echo "usage: trident [status|posture|counters|pause on|off|canary|tick]"; exit 2
+    echo "usage: trident [status|posture|counters|pause on|off|canary|tick|brain …|policy …|forecast]"; exit 2
     ;;
 esac
