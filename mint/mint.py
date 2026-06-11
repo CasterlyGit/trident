@@ -186,12 +186,15 @@ def read_forecast(tele):
         return None
 
 
-def read_policy():
-    """Validated, unexpired brain policy or None. Every failure mode → None (fail open)."""
+def read_policy(lever_global=None):
+    """Validated, unexpired brain policy or None. Every failure mode → None (fail open).
+
+    `lever_global` re-clamps the overlay against the live human lever every tick: a
+    throttle-down strips the brain's expansionary knobs instantly, no re-fire needed."""
     doc = _read_json(POLICY)
     if not doc:
         return None, None
-    clamped = formulas.validate_policy(doc, _now())
+    clamped = formulas.validate_policy(doc, _now(), lever_global)
     if not clamped:
         return None, None
     meta = {"policy_active": True,
@@ -367,7 +370,7 @@ def tick(brain_ok=False):
 
     # Brain overlay: default block ONLY — pins are explicit human bypass valves,
     # no machine policy may re-route them. Invalid/expired/missing policy → no-op.
-    policy, brain_meta = read_policy()
+    policy, brain_meta = read_policy(lever["global"])
     if policy:
         default = formulas.apply_policy(default, policy)
 

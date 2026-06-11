@@ -196,16 +196,64 @@ POLICY_CLAMPS = {
 }
 INJECT_FLOOR = 800  # active-handoff chunk is rank-0/exempt anyway; belt + suspenders
 
+# The volume knobs: pushing these above neutral pours in MORE tokens. They are the
+# ones a human throttle-down caps — the brain may still reshape tier (price-per-token),
+# but it may not inflate raw volume past what the developer's lever permits.
+VOLUME_KNOBS = ("width_mult", "think_mult", "inject_mult")
+LEVER_TIGHTEN_BELOW = 40   # SLOW/CRAWL bands (throttle CLI) — human is actively conserving
+LEVER_RELEASE_AT = 70      # FULL POWER band — brain has full authority within the rails
+
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
-def validate_policy(doc, now):
+def lever_stance(lever_global):
+    """Map the human throttle's global value to the brain's standing authority.
+
+    Mirrors the throttle CLI's own bands so the constraint reads the same to the
+    developer as the gauge they set:
+        global  < 40  → 'tighten'  (SLOW/CRAWL — actively conserving)
+        global >= 70  → 'release'  (FULL POWER — full brain authority within rails)
+        else          → 'neutral'  (EASE)
+    None/garbage → 'neutral' (fail open: the lever adds no extra constraint).
+    """
+    try:
+        g = int(lever_global)
+    except (TypeError, ValueError):
+        return "neutral"
+    if g < LEVER_TIGHTEN_BELOW:
+        return "tighten"
+    if g >= LEVER_RELEASE_AT:
+        return "release"
+    return "neutral"
+
+
+def _is_identity(knob, v):
+    """A knob value that changes nothing — pruned so a policy reads live only when
+    it actually reroutes. tier_bias 0 and any multiplier == 1.0 are no-ops."""
+    if knob == "tier_bias":
+        return v == 0
+    if knob in ("width_mult", "think_mult", "inject_mult", "compact_bias"):
+        return abs(v - 1.0) < 1e-9
+    return False
+
+
+def validate_policy(doc, now, lever_global=None):
     """Return a clamped policy dict, or None if the doc is unusable (fail open).
 
     Unusable = wrong schema, expired, or no parseable knobs. Every knob is
     individually optional; garbage knobs are dropped, not fatal.
+
+    `lever_global` makes the human throttle a SOVEREIGN, CONTINUOUS constraint on
+    the brain — not just a number in the digest. In the 'tighten' stance (the
+    developer has pulled the lever into SLOW/CRAWL) the policy is forced PURELY
+    SUBTRACTIVE: tier_bias stays free (narrow+smart reshaping is sanctioned), but
+    the volume knobs are capped at neutral, compaction may only move earlier, and
+    speculative work can't be forced on. The clamp can only pull the brain toward
+    the mechanical baseline — never away from the direction the human chose. It is
+    re-applied on every read, so moving the lever re-bounds a live overlay
+    instantly, with no brain re-fire. 'neutral'/'release' behave exactly as before.
     """
     if not isinstance(doc, dict) or doc.get("schema_version") != POLICY_SCHEMA_VERSION:
         return None
@@ -227,6 +275,17 @@ def validate_policy(doc, now):
             continue
     if isinstance(raw.get("spec_override"), bool):
         out["spec_override"] = raw["spec_override"]
+    # Human lever as a direction constraint — purely subtractive (toward baseline).
+    if lever_stance(lever_global) == "tighten":
+        for k in VOLUME_KNOBS:
+            if k in out:
+                out[k] = min(out[k], 1.0)
+        if "compact_bias" in out:
+            out["compact_bias"] = min(out["compact_bias"], 1.0)  # earlier-only, never later
+        if out.get("spec_override") is True:
+            del out["spec_override"]                             # can't force speculation on
+    # Prune no-ops so the overlay reports live only when it truly reroutes.
+    out = {k: v for k, v in out.items() if not _is_identity(k, v)}
     return out or None
 
 

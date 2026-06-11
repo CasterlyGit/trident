@@ -63,6 +63,42 @@ class TestPolicyValidation(unittest.TestCase):
             fresh_policy_doc(self.now, spec_override=False), self.now)
         self.assertEqual(p, {"spec_override": False})
 
+    def test_lever_stance_bands(self):
+        for g in (0, 25, 39):
+            self.assertEqual(formulas.lever_stance(g), "tighten", g)
+        for g in (40, 55, 69):
+            self.assertEqual(formulas.lever_stance(g), "neutral", g)
+        for g in (70, 100):
+            self.assertEqual(formulas.lever_stance(g), "release", g)
+        self.assertEqual(formulas.lever_stance(None), "neutral")     # fail open
+        self.assertEqual(formulas.lever_stance("garbage"), "neutral")
+
+    def test_tighten_strips_expansion_keeps_reshape(self):
+        # Human in CRAWL (lever 20): volume inflation + forced spec are removed,
+        # but tier reshaping (narrow+smart) survives the clamp.
+        doc = fresh_policy_doc(self.now, tier_bias=1, width_mult=1.4, think_mult=1.3,
+                               inject_mult=1.2, compact_bias=1.2, spec_override=True)
+        p = formulas.validate_policy(doc, self.now, lever_global=20)
+        self.assertEqual(p["tier_bias"], 1)            # reshape stays legal
+        for k in ("width_mult", "think_mult", "inject_mult", "compact_bias"):
+            self.assertNotIn(k, p)                     # capped to 1.0 → pruned as no-op
+        self.assertNotIn("spec_override", p)           # can't force speculation on
+
+    def test_tighten_passes_conserving_knobs_through(self):
+        doc = fresh_policy_doc(self.now, width_mult=0.6, compact_bias=0.8, spec_override=False)
+        p = formulas.validate_policy(doc, self.now, lever_global=10)
+        self.assertEqual(p, {"width_mult": 0.6, "compact_bias": 0.8, "spec_override": False})
+
+    def test_release_and_legacy_unconstrained(self):
+        doc = fresh_policy_doc(self.now, width_mult=1.4, spec_override=True)
+        self.assertEqual(formulas.validate_policy(doc, self.now, 80)["width_mult"], 1.4)
+        self.assertTrue(formulas.validate_policy(doc, self.now, 80)["spec_override"])
+        self.assertEqual(formulas.validate_policy(doc, self.now)["width_mult"], 1.4)  # 2-arg
+
+    def test_noop_policy_pruned_to_none(self):
+        self.assertIsNone(formulas.validate_policy(
+            fresh_policy_doc(self.now, width_mult=1.0, tier_bias=0), self.now))
+
 
 class TestApplyPolicy(unittest.TestCase):
     def setUp(self):
@@ -185,6 +221,22 @@ class TestBrainGating(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("band-change", reason)
 
+    def test_lever_move_triggers(self):
+        w = make_brain_wallet()
+        w["lever"] = {"global": 25}
+        state = {"last_fire_ts": self.now - 1500, "last_band": "AMBER",
+                 "last_lever": 100, "fires": []}
+        ok, reason = brain.should_fire(w, state, self.now)
+        self.assertTrue(ok)
+        self.assertIn("lever-move", reason)
+        # inside the band cooldown (10min), the move does not re-fire
+        state["last_fire_ts"] = self.now - 600
+        self.assertFalse(brain.should_fire(w, state, self.now)[0])
+        # a sub-threshold nudge is not a trigger
+        state["last_fire_ts"] = self.now - 1500
+        w["lever"]["global"] = 95
+        self.assertNotIn("lever-move", brain.should_fire(w, state, self.now)[1])
+
     def test_inflight_lock_blocks(self):
         open(brain.LOCK, "w").close()
         ok, reason = brain.should_fire(make_brain_wallet(), {}, self.now)
@@ -240,6 +292,19 @@ class TestMintIntegration(unittest.TestCase):
         pinned = w["derived"]["per_pin"]["sid-pinned"]
         self.assertNotIn("🧠", pinned["envelope"])  # pins are human-sovereign
         self.assertNotIn("brain", pinned)
+
+    def test_lever_tightens_live_policy_on_read(self):
+        # Brain wrote an expansionary overlay; the developer then throttles into
+        # CRAWL. The next tick must re-clamp it — no brain re-fire required.
+        self._telemetry()
+        with open(os.path.join(self.dir, "burn-throttle.json"), "w") as f:
+            json.dump({"global": 20, "pins": {}}, f)
+        with open(os.path.join(self.dir, "trident-policy.json"), "w") as f:
+            json.dump(fresh_policy_doc(self.now, width_mult=1.5, spec_override=True,
+                                       tier_bias=-1), f)
+        d = self._tick()["derived"]["default"]
+        self.assertFalse(d["speculative"])    # spec_override=True stripped under tighten
+        self.assertIn("🧠", d["envelope"])     # tier_bias survives → overlay still live
 
     def test_expired_policy_ignored(self):
         self._telemetry()

@@ -45,6 +45,7 @@ LOG = os.path.join(STATE, "trident-brain.log")
 MAX_FIRES_PER_WINDOW = 2
 COOLDOWN_S = 2700          # ≥45min between routine fires
 BAND_CHANGE_COOLDOWN_S = 1200  # posture-band flip may re-fire after 20min
+LEVER_MOVE_DELTA = 15      # a manual throttle move ≥ this re-fits the brain (band cooldown)
 MIN_LEFT_PCT = 8           # never burn the dregs deciding how to save the dregs
 LOCK_FRESH_S = 600
 POLICY_TTL_S = 7200
@@ -64,6 +65,14 @@ Knobs (all optional; hard-clamped in code — values outside rails are clipped):
   inject_mult    0.6..1.25    multiplier on context-injection cap
   compact_bias   0.75..1.25   <1 = compact/handoff fires earlier
   spec_override  true|false   force speculative work on/off
+
+The human lever (digest `lever.global`, 0-100) is a SOVEREIGN manual intent signal — the \
+developer's own throttle, not a derived metric. `lever_stance` names its standing intent and \
+`lever_path` shows the recent manual trajectory. HONOR ITS DIRECTION: under stance 'tighten' \
+the developer is actively conserving — do NOT inflate volume (width/think/inject > 1.0 and \
+spec=on are stripped in code regardless); prefer tier reshaping (narrow+smart) and earlier \
+compaction. Under 'release' you hold full authority within the rails. A fresh `lever_path` \
+move means the developer just re-stated intent — weight it heavily.
 
 Decision principles:
 - Narrow+smart can beat wide+cheap: if burn is high from many parallel agents, consider
@@ -146,10 +155,18 @@ def should_fire(wallet, state, now, force=False):
     last_fire = state.get("last_fire_ts", 0)
     band = _band(wallet["derived"]["default"])
     band_changed = state.get("last_band") and band != state["last_band"]
+    # The human lever is a first-class trigger: a manual move since the policy was
+    # last fit is the strongest signal of intent the developer can send.
+    cur_lever = (wallet.get("lever") or {}).get("global")
+    last_lever = state.get("last_lever")
+    lever_moved = (last_lever is not None and cur_lever is not None
+                   and abs(cur_lever - last_lever) >= LEVER_MOVE_DELTA)
     policy_doc = _read_json(POLICY)
-    policy_live = bool(policy_doc and formulas.validate_policy(policy_doc, now))
+    policy_live = bool(policy_doc and formulas.validate_policy(policy_doc, now, cur_lever))
     if not policy_live and now - last_fire >= COOLDOWN_S:
         return True, "no-live-policy"
+    if lever_moved and now - last_fire >= BAND_CHANGE_COOLDOWN_S:
+        return True, f"lever-move:{last_lever}→{cur_lever}"
     if band_changed and now - last_fire >= BAND_CHANGE_COOLDOWN_S:
         return True, f"band-change:{state['last_band']}→{band}"
     return False, "cooldown"
@@ -195,18 +212,37 @@ def _history_tail(now, span_s=3600, cap=80):
     return pts[::step][-cap:]
 
 
+def _lever_path(points):
+    """Distinct consecutive global-lever values across the recent window — the human's
+    manual trajectory (e.g. [100, 40, 25] = two deliberate downshifts vs a steady [40])."""
+    path = []
+    for r in points:
+        l = r.get("L")
+        if l is None:
+            continue
+        if not path or path[-1] != l:
+            path.append(l)
+    return path[-8:]
+
+
 def build_digest(wallet, now):
     default = dict(wallet.get("derived", {}).get("default", {}))
     default.pop("posture", None)
+    hist = _history_tail(now)
+    gl = (wallet.get("lever") or {}).get("global")
     return {
         "now": _iso(now),
         "telemetry": wallet.get("telemetry"),
         "lever": wallet.get("lever"),
+        # The lever surfaced as INTENT, not just a number: standing stance + the
+        # developer's recent manual trajectory. This is what the brain must honor.
+        "lever_stance": formulas.lever_stance(gl),
+        "lever_path": _lever_path(hist),
         "derived_default": default,
         "forecast": wallet.get("forecast"),
         "pace": wallet.get("pace"),
         "counters": _read_json(COUNTERS),
-        "history_45min": _history_tail(now),
+        "history_45min": hist,
         "previous_policy": _read_json(POLICY),
     }
 
@@ -241,6 +277,7 @@ def fire(force=False):
     if not ok:
         print(f"brain: not firing ({reason})")
         return 0
+    cur_lever = (wallet.get("lever") or {}).get("global")
     claude = _find_claude()
     if not claude:
         _audit({"ts": _iso(now), "ok": False, "error": "claude binary not found"})
@@ -287,7 +324,7 @@ def fire(force=False):
                    else now + POLICY_TTL_S,
                    "policy": verdict["policy"],
                    "rationale": audit_rec["rationale"]}
-            clamped = formulas.validate_policy(doc, now)
+            clamped = formulas.validate_policy(doc, now, cur_lever)
             if clamped:
                 _atomic_write(POLICY, doc)
                 audit_rec["applied"] = clamped
@@ -299,6 +336,7 @@ def fire(force=False):
         state["fires"] = state["fires"][-20:]
         state["last_fire_ts"] = now
         state["last_band"] = _band(wallet["derived"]["default"])
+        state["last_lever"] = cur_lever  # the intent this policy was fit to
         _atomic_write(BRAIN_STATE, state)
         print(f"brain: fired ok in {dur}s — {audit_rec.get('applied') or 'no_change'}")
         return 0
@@ -316,12 +354,16 @@ def fire(force=False):
 def status():
     state = _read_json(BRAIN_STATE) or {}
     doc = _read_json(POLICY)
-    live = formulas.validate_policy(doc, _now()) if doc else None
+    gl = (_read_json(WALLET) or {}).get("lever", {}).get("global")
+    live = formulas.validate_policy(doc, _now(), gl) if doc else None
     print(json.dumps({
         "off": os.path.exists(OFF_FLAG),
         "last_fire": _iso(state["last_fire_ts"]) if state.get("last_fire_ts") else None,
         "fires_recorded": len(state.get("fires", [])),
         "last_band": state.get("last_band"),
+        "last_lever": state.get("last_lever"),
+        "lever_global": gl,
+        "lever_stance": formulas.lever_stance(gl),
         "policy_live": bool(live),
         "policy_clamped": live,
         "policy_doc": doc,

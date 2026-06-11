@@ -157,14 +157,28 @@ The fast path stays 100% mechanical. The brain (`brain/brain.py`, claude-fable-5
 *policy re-fitter* sitting above it:
 
 - **Cadence:** ≤2 fires per 5h window, spawned detached from MINT `--daemon` ticks only
-  (never `--tick`/ingest/tests). Triggers: no live policy + 45min cooldown, or a
-  posture-band flip + 20min cooldown. Never below 8% left (don't burn the dregs deciding
-  how to save the dregs). Kill switch: `~/.claude/state/trident-brain-off`.
-- **Input:** a compact burn digest — wallet, lever, 45min of the `trident-history.jsonl`
-  ring (one line per tick, 200KB cap), counters, pace, the deterministic forecast.
+  (never `--tick`/ingest/tests). Triggers: no live policy + 45min cooldown, a
+  posture-band flip + 20min cooldown, or **a manual throttle move ≥15pts + 20min
+  cooldown** (the human lever is a first-class wake signal). Never below 8% left (don't
+  burn the dregs deciding how to save the dregs). Kill switch: `~/.claude/state/trident-brain-off`.
+- **Input:** a compact burn digest — wallet, lever **surfaced as intent (`lever_stance` +
+  `lever_path` manual trajectory, not an anonymous int)**, 45min of the
+  `trident-history.jsonl` ring (one line per tick, 200KB cap), counters, pace, the
+  deterministic forecast.
 - **Output:** strict-JSON knobs → `trident-policy.json`, expiring (≤2h, never past reset).
   MINT folds it into the **default block only — pins are human bypass valves, no machine
   policy may re-route them.** Envelope gains `🧠` while a policy is live.
+- **The human lever is sovereign over the brain (added 2026-06-10):** `lever_stance`
+  maps the throttle's global value to the same bands the CLI shows (`<40` tighten / `≥70`
+  release / else neutral). In the **tighten** stance the policy is forced *purely
+  subtractive* in `validate_policy`: tier reshaping stays free (narrow+smart is
+  sanctioned) but the volume knobs (width/think/inject) are capped at neutral, compaction
+  may only move *earlier*, and speculative work can't be forced on — the brain may pull
+  toward the mechanical baseline, never away from the direction the developer chose. The
+  clamp is **re-applied on every read**, so moving the lever re-bounds a live overlay
+  *instantly* with no re-fire; an all-expansion policy under tighten prunes to nothing and
+  the overlay simply lifts. Two governors, one bright line: the human's lever outranks the
+  AI's policy, always.
 - **Rails are code, not prompt:** `formulas.validate_policy` is the single gate —
   tier_bias ±1, width 0.5–1.5×, think 0.5–1.5×, inject 0.6–1.25× (floor 800), compact
   0.75–1.25×, spec on/off. `verify_min`/`roi_min`/L/H are not overlay-addressable at
